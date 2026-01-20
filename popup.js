@@ -54,17 +54,19 @@ async function displayTabs() {
   tabCount.textContent = `${tabs.length} tab${tabs.length !== 1 ? 's' : ''} in ${windowCount} window${windowCount !== 1 ? 's' : ''}`;
 }
 
-function showStatus(message) {
+function showStatus(message, isError = false) {
   const status = document.getElementById('status');
   status.textContent = message;
-  setTimeout(() => { status.textContent = ''; }, 2000);
+  status.className = isError ? 'error' : '';
+  setTimeout(() => { status.textContent = ''; status.className = ''; }, 3000);
 }
 
 // Save preferences
 function savePrefs() {
   const prefs = {
     showTitles: document.getElementById('showTitles').checked,
-    groupWindows: document.getElementById('groupWindows').checked
+    groupWindows: document.getElementById('groupWindows').checked,
+    storageUrl: document.getElementById('storageUrl').value
   };
   chrome.storage.local.set({ prefs });
 }
@@ -76,9 +78,97 @@ async function loadPrefs() {
     if (result.prefs) {
       document.getElementById('showTitles').checked = result.prefs.showTitles || false;
       document.getElementById('groupWindows').checked = result.prefs.groupWindows || false;
+      document.getElementById('storageUrl').value = result.prefs.storageUrl || '';
     }
   } catch (e) {
     // Storage not available, use defaults
+  }
+}
+
+// Get storage URL from WebID or direct storage URL
+async function getStorageFromWebId(url) {
+  // If it looks like a WebID (ends with /profile/card#me or similar), fetch and parse
+  if (url.includes('/profile/card') || url.includes('#me')) {
+    try {
+      const profileUrl = url.split('#')[0];
+      const response = await fetch(profileUrl, {
+        headers: { 'Accept': 'text/turtle' },
+        credentials: 'include'
+      });
+      const text = await response.text();
+      // Look for pim:storage or space:storage in turtle
+      const storageMatch = text.match(/<([^>]+)>\s+a\s+.*storage/i) ||
+                          text.match(/pim:storage\s+<([^>]+)>/i) ||
+                          text.match(/space:storage\s+<([^>]+)>/i);
+      if (storageMatch) {
+        return storageMatch[1];
+      }
+    } catch (e) {
+      console.error('Failed to fetch WebID:', e);
+    }
+  }
+  // Otherwise treat as direct storage URL
+  return url.endsWith('/') ? url : url + '/';
+}
+
+// Save to Solid pod
+async function saveToSolid() {
+  const storageInput = document.getElementById('storageUrl').value.trim();
+
+  if (!storageInput) {
+    showStatus('Please enter your Solid storage URL', true);
+    return;
+  }
+
+  const tabList = document.getElementById('tabList');
+  const content = tabList.value;
+
+  if (!content) {
+    showStatus('No tabs to save', true);
+    return;
+  }
+
+  try {
+    showStatus('Saving to Solid...');
+
+    const storage = await getStorageFromWebId(storageInput);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `tabs-${timestamp}.txt`;
+    const folderPath = `${storage}private/tabstr/`;
+    const fileUrl = `${folderPath}${filename}`;
+
+    // First, try to create the folder (will fail silently if exists)
+    try {
+      await fetch(folderPath, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/turtle' },
+        credentials: 'include',
+        body: ''
+      });
+    } catch (e) {
+      // Folder might already exist, continue
+    }
+
+    // Save the file
+    const response = await fetch(fileUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      credentials: 'include',
+      body: content
+    });
+
+    if (response.ok || response.status === 201) {
+      showStatus(`Saved to ${filename}`);
+      savePrefs();
+    } else if (response.status === 401 || response.status === 403) {
+      // Not logged in, redirect to storage root to trigger login
+      showStatus('Redirecting to login...', true);
+      chrome.tabs.create({ url: storage });
+    } else {
+      showStatus(`Error: ${response.status} ${response.statusText}`, true);
+    }
+  } catch (err) {
+    showStatus(`Error: ${err.message}`, true);
   }
 }
 
@@ -111,6 +201,8 @@ document.getElementById('downloadBtn').addEventListener('click', async () => {
 
 document.getElementById('refreshBtn').addEventListener('click', displayTabs);
 
+document.getElementById('solidBtn').addEventListener('click', saveToSolid);
+
 document.getElementById('showTitles').addEventListener('change', () => {
   savePrefs();
   displayTabs();
@@ -120,6 +212,8 @@ document.getElementById('groupWindows').addEventListener('change', () => {
   savePrefs();
   displayTabs();
 });
+
+document.getElementById('storageUrl').addEventListener('change', savePrefs);
 
 // Initialize
 loadPrefs().then(displayTabs);
