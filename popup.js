@@ -85,10 +85,110 @@ async function loadPrefs() {
   }
 }
 
+/**
+ * Parse Turtle prefixes into a map
+ * @param {string} turtle - Turtle document text
+ * @returns {Object} - Map of prefix to full URI
+ */
+function parseTurtlePrefixes(turtle) {
+  const prefixes = {};
+  // Match @prefix or PREFIX declarations
+  const prefixRegex = /(?:@prefix|PREFIX)\s+(\w*):\s*<([^>]+)>/gi;
+  let match;
+  while ((match = prefixRegex.exec(turtle)) !== null) {
+    prefixes[match[1]] = match[2];
+  }
+  return prefixes;
+}
+
+/**
+ * Expand a prefixed name to full URI
+ * @param {string} prefixedName - e.g., "pim:storage"
+ * @param {Object} prefixes - Prefix map
+ * @returns {string|null} - Full URI or null
+ */
+function expandPrefixedName(prefixedName, prefixes) {
+  const colonIndex = prefixedName.indexOf(':');
+  if (colonIndex === -1) return null;
+  const prefix = prefixedName.slice(0, colonIndex);
+  const localName = prefixedName.slice(colonIndex + 1);
+  if (prefixes[prefix]) {
+    return prefixes[prefix] + localName;
+  }
+  return null;
+}
+
+/**
+ * Find storage URL in Turtle document
+ * @param {string} turtle - Turtle document text
+ * @param {string} baseUrl - Base URL for resolving relative URIs
+ * @returns {string|null} - Storage URL or null
+ */
+function findStorageInTurtle(turtle, baseUrl) {
+  const prefixes = parseTurtlePrefixes(turtle);
+
+  // Add common prefixes as fallbacks
+  if (!prefixes['pim']) prefixes['pim'] = 'http://www.w3.org/ns/pim/space#';
+  if (!prefixes['space']) prefixes['space'] = 'http://www.w3.org/ns/pim/space#';
+
+  // Normalize whitespace for multiline statement matching
+  const normalized = turtle.replace(/\s+/g, ' ');
+
+  // Storage predicates to look for (full URIs)
+  const storagePredicates = [
+    'http://www.w3.org/ns/pim/space#storage',
+    'http://www.w3.org/ns/solid/terms#storage'
+  ];
+
+  // Pattern 1: Full URI predicate with full URI object
+  // e.g., <http://www.w3.org/ns/pim/space#storage> <https://pod.example/>
+  for (const predicate of storagePredicates) {
+    const fullUriPattern = new RegExp(`<${predicate.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}>\\s*<([^>]+)>`, 'i');
+    const match = normalized.match(fullUriPattern);
+    if (match) return match[1];
+  }
+
+  // Pattern 2: Prefixed predicate with full URI object
+  // e.g., pim:storage <https://pod.example/>
+  const prefixedPredicates = ['pim:storage', 'space:storage', 'solid:storage'];
+  for (const pred of prefixedPredicates) {
+    const prefixedPattern = new RegExp(`${pred}\\s*<([^>]+)>`, 'i');
+    const match = normalized.match(prefixedPattern);
+    if (match) return match[1];
+  }
+
+  // Pattern 3: Any predicate with prefixed object (less common)
+  // e.g., pim:storage pod:storage
+  for (const pred of prefixedPredicates) {
+    const prefixedObjPattern = new RegExp(`${pred}\\s+(\\w+:\\w+)`, 'i');
+    const match = normalized.match(prefixedObjPattern);
+    if (match) {
+      const expanded = expandPrefixedName(match[1], prefixes);
+      if (expanded) return expanded;
+    }
+  }
+
+  // Pattern 4: Relative URI (resolve against base)
+  // e.g., pim:storage </> or pim:storage </>
+  for (const pred of prefixedPredicates) {
+    const relativePattern = new RegExp(`${pred}\\s*<(/[^>]*)>`, 'i');
+    const match = normalized.match(relativePattern);
+    if (match) {
+      try {
+        return new URL(match[1], baseUrl).href;
+      } catch (e) {
+        // Invalid URL, continue
+      }
+    }
+  }
+
+  return null;
+}
+
 // Get storage URL from WebID or direct storage URL
 async function getStorageFromWebId(url) {
   // If it looks like a WebID (ends with /profile/card#me or similar), fetch and parse
-  if (url.includes('/profile/card') || url.includes('#me')) {
+  if (url.includes('/profile/card') || url.includes('#me') || url.includes('#i')) {
     try {
       const profileUrl = url.split('#')[0];
       const response = await fetch(profileUrl, {
@@ -96,12 +196,11 @@ async function getStorageFromWebId(url) {
         credentials: 'include'
       });
       const text = await response.text();
-      // Look for pim:storage or space:storage in turtle
-      const storageMatch = text.match(/<([^>]+)>\s+a\s+.*storage/i) ||
-                          text.match(/pim:storage\s+<([^>]+)>/i) ||
-                          text.match(/space:storage\s+<([^>]+)>/i);
-      if (storageMatch) {
-        return storageMatch[1];
+
+      // Use robust Turtle parser
+      const storage = findStorageInTurtle(text, profileUrl);
+      if (storage) {
+        return storage.endsWith('/') ? storage : storage + '/';
       }
     } catch (e) {
       console.error('Failed to fetch WebID:', e);
