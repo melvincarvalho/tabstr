@@ -1,6 +1,15 @@
 # Tabstr
 
-Export all your open browser tab URLs to a text list.
+![License](https://img.shields.io/github/license/melvincarvalho/tabstr?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.0-blue?style=flat-square)
+![Manifest](https://img.shields.io/badge/manifest-v3-green?style=flat-square&logo=googlechrome)
+![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)
+
+> Export all your open browser tab URLs to a text list.
+
+![GitHub Stars](https://img.shields.io/github/stars/melvincarvalho/tabstr?style=flat-square)
+![GitHub Forks](https://img.shields.io/github/forks/melvincarvalho/tabstr?style=flat-square)
+![Last Commit](https://img.shields.io/github/last-commit/melvincarvalho/tabstr?style=flat-square)
 
 ## Features
 
